@@ -1,10 +1,10 @@
 # HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners
-Synchronizes Entra ID groupmemberships to HelloID Self service productassignments
+Synchronizes Teams owners to HelloID Resource Owner Groupmemberships
 
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments/network/members"><img src="https://img.shields.io/github/forks/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments" alt="Forks Badge"/></a>
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments/pulls"><img src="https://img.shields.io/github/issues-pr/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments" alt="Pull Requests Badge"/></a>
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments/issues"><img src="https://img.shields.io/github/issues/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments" alt="Issues Badge"/></a>
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments/graphs/contributors"><img alt="GitHub contributors" src="https://img.shields.io/github/contributors/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groupmemberships-To-SelfService-Productassignments?color=2b9348"></a>
+<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/network/members"><img src="https://img.shields.io/github/forks/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners" alt="Forks Badge"/></a>
+<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/pulls"><img src="https://img.shields.io/github/issues-pr/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners" alt="Pull Requests Badge"/></a>
+<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/issues"><img src="https://img.shields.io/github/issues/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners" alt="Issues Badge"/></a>
+<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/graphs/contributors"><img alt="GitHub contributors" src="https://img.shields.io/github/contributors/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners?color=2b9348"></a>
 
 
 | :information_source: Information |
@@ -12,7 +12,7 @@ Synchronizes Entra ID groupmemberships to HelloID Self service productassignment
 | This repository contains the connector and configuration code only. The implementer is responsible to acquire the connection details such as username, password, certificate, etc. You might even need to sign a contract or agreement with the supplier before implementing this connector. Please contact the client's application manager to coordinate the connector requirements.       |
 
 ## Table of Contents
-- [HelloID-Conn-SA-Sync-EntraID-Groupmemberships-To-SelfService-Productassignments](#helloid-conn-sa-sync-entraid-groupmemberships-to-selfservice-productassignments)
+- [HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners](#helloid-conn-sa-sync-teams-owners-to-resource-owners)
   - [Table of Contents](#table-of-contents)
   - [Requirements](#requirements)
   - [Introduction](#introduction)
@@ -38,13 +38,9 @@ Synchronizes Entra ID groupmemberships to HelloID Self service productassignment
 
 ## Introduction
 
-By using this connector, you will have the ability to create and remove HelloID SelfService Productassignments based on groupmemberships in your Entra ID.
+By using this connector, you will have the ability to add Teams owners to the corresponding Resource Owner groups in HelloID.
 
-The products will be assigned to a user when they are already a member of the group that the product would make them member of. This way the product can be returned to revoke the groupmembership without having to first request all the products "you already have".
-
-And vice versa for the removing of the productassignments. The products will be returned from a user when they are already no longer a member of the group that the product would make them member of. This way the product can be requested again without having to first return all the products "you already no longer have".
-
-This is intended for scenarios where the groupmemberships are managed by other sources (e.g. manual actions or Provisioning) than the HelloID products to keep this in sync. This groupmembership sync is desinged to work in combination with the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products).
+This is intended for scenarios where the owners are managed by other sources (e.g. manual actions) than the HelloID products to keep this in sync. This resource owner sync is desinged to work in combination with the [Teams to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-To-SelfService-Products).
 
 ## Getting started
 
@@ -113,12 +109,10 @@ There are multiple ways to authenticate to the Graph API with each has its own p
 | $EntraAppID | String value of Entra ID App ID  | Recommended to set as Global Variable |
 | $EntraAppSecret  | String value of Entra ID App Secret  | Recommended to set as Global Variable |
 | $entraIDGroupsSearchFilter   | String value of seachfilter of which Entra ID groups to include   | Optional, when no filter is provided ($entraIDGroupsSearchFilter = $null), all groups will be queried - Only displayName and description are supported with the search filter. Reference: https://learn.microsoft.com/en-us/graph/search-query-parameter?tabs=http#using-search-on-directory-object-collections  |
-| $ProductSkuPrefix | String value of prefix filter of which HelloID Self service Products to include    | Optional, when no SkuPrefix is provided ($ProductSkuPrefix = $null), all products will be queried |
-| $PowerShellActionName | String value of name of the PowerShell action that grants the Entra ID user to the Entra ID group | The default value ("Add-EntraIDUserToEntraIDGroup") is set to match the value from the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products)   |
-| $PowerShellActionVariableCorrelationProperty  | String value of name of the property of HelloID Self service Product action variables to match to Entra ID Groups (name of the variable of the PowerShell action that contains the group) | The default value ("GroupId") is set to match the value from the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products), where Group is set as the variable name for the group for the Product actions. If your products are from a different source, change this accordingly (e.g. Group)   |
-| $entraIDGroupCorrelationProperty   | String value of name of the property of Entra ID groups to match Groups in HelloID Self service Product actions (the group) | The default value ("id") is set to match the value from the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products), where the Entra ID group SamAccountName is set as the Group value for the Product actions. If your products are from a different source, change this accordingly (e.g. Name)   |
-| $entraIDUserCorrelationProperty    | String value of name of the property of Entra ID users to match to HelloID users    | The default value ("id") is set to match the value from the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products), where the Entra ID user ID is set to the HelloID User immutableId. If your users are from a different source, change this accordingly (e.g. userPrincipalName)  |
-| $helloIDUserCorrelationProperty   | String value of name of the property of HelloID users to match to Entra ID users    | The default value ("immutableId") is set to match the value from the [Entra ID Sync](https://docs.helloid.com/en/access-management/directory-sync/azure-ad-sync.html), where the Entra ID user ID is set to the HelloID User immutableId. If your users are from a different source, change this accordingly (e.g. username)   |
+| $resourceOwnerGroupSource | String value of source of the groups in HelloID    |  |
+| $resourceOwnerGroupPrefix | String value of prefix to recognize the owner group    | The value is set to match the value of $calculatedResourceOwnerGroupPrefix from the [Teams to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-To-SelfService-Products) |
+| $resourceOwnerGroupSuffix | String value of suffix to recognize the owner group    | The value is set to match the value of $calculatedResourceOwnerGroupSuffix from the [Teams to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-To-SelfService-Products) |
+| $removeMembers | Boolean value of whether to remove the teams owners for resource owner groups when they are no longer an owner    | |
 
 ## Remarks
 - The Productassignments are granted and revoked. Make sure your configuration is correct to avoid unwanted revokes
