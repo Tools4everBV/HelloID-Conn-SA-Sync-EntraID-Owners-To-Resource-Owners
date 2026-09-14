@@ -1,9 +1,10 @@
 #####################################################
-# HelloID-Conn-SA-Sync-Teams-Owners-To-ResourceOwner-Groupmemberships
+# HelloID-Conn-SA-Sync-EntraID-Owners-To-ResourceOwner-Groupmemberships
 #
-# Version: 1.0.0
+# Version: 1.1.0
 #####################################################
-# Set to false to acutally perform actions - Only run as DryRun when testing/troubleshooting!
+
+# Set to false to actually perform actions - Only run as DryRun when testing/troubleshooting!
 $dryRun = $false
 # Set to true to log each individual action - May cause lots of logging, so use with cause, Only run testing/troubleshooting!
 $verboseLogging = $false
@@ -18,33 +19,214 @@ $WarningPreference = "Continue"
 # Set TLS to accept TLS, TLS 1.1 and TLS 1.2
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
 
-# Make sure to create the Global variables defined below in HelloID
-#HelloID Connection Configuration
-# $script:PortalBaseUrl = "" # Set from Global Variable
-# $portalApiKey = "" # Set from Global Variable
-# $portalApiSecret = "" # Set from Global Variable
-
 ######################################################################################
-# Entra ID Connection Configuration
+# Connection Configuration - Set up connection credentials
+######################################################################################
+# HelloID API connection (required)
+$helloIDPortalBaseUrl = $portalBaseUrl # When running from HelloID, set from default Global Variable
+$helloIDPortalApiKey = $portalApiKey # When running from HelloID, set from default Global Variable
+$helloIDPortalApiSecret = $portalApiSecret # When running from HelloID, set from default Global Variable
+
+# Entra ID / Microsoft Graph connection (required)
+# Used to connect to Microsoft Graph API
 $MSGraphBaseUri = "https://graph.microsoft.com/" # Fixed value
-# $EntraTenantId = "" # Set from Global Variable
-# $EntraAppID = "" # Set from Global Variable
-# $EntraAppSecret = "" # Set from Global Variable
-$entraIDGroupsSearchFilter = "`$search=`"displayName:department_`"" # Optional, when no filter is provided ($entraIDGroupsSearchFilter = $null), all groups will be queried - Only displayName and description are supported with the search filter. Reference: https://learn.microsoft.com/en-us/graph/search-query-parameter?tabs=http#using-search-on-directory-object-collections
+# $EntraIdTenantId = "" # Set from Global Variable
+# $EntraIdAppId = "" # Set from Global Variable
+# $EntraIdCertificateBase64String = "" # Set from Global Variable
+# $EntraIdCertificatePassword = "" # Set from Global Variable
+######################################################################################
+
+# Filter which groups to sync using Microsoft Graph search filter (optional)
+# $search is not supported by default. Use $filter options
+# Examples:
+# - All groups: $null
+# - By displayName: "startsWith(displayName,'department_')"
+# Note: Only displayName and description support the search filter
+# Reference: https://learn.microsoft.com/en-us/graph/search-query-parameter?tabs=http#using-search-on-directory-object-collections
+$entraIDGroupsSearchFilter = $null
 ######################################################################################
 
 #HelloID Configuration
 $resourceOwnerGroupSource = "Local" # Specify the source of the groups - if source is any other than "Local", the sync of the target system itself might overwrite the memberships set form this sync
-# The HelloID Resource owner group will be queried based on the shared mailbox name and the specified prefix and suffix
-$resourceOwnerGroupPrefix = "Team eigenaar " # Specify prefix to recognize the resource owner group
-$resourceOwnerGroupSuffix = "" # Specify suffix to recognize the resource owner group
+# The HelloID Resource owner group will be queried based on the distribution group name and the specified prefix and suffix
+$resourceOwnerGroupPrefix = "" # Specify prefix to recognize the resource owner group
+$resourceOwnerGroupSuffix = " Resource Owner" # Specify suffix to recognize the resource owner group
 $removeMembers = $true # If true, existing members will be removed if they no longer have full access to the corresponding mailbox - This will overwrite manual added users
 
 #region functions
+function Write-StatusMessage {
+    <#
+    .SYNOPSIS
+    Writes a status message to the appropriate logging system.
+    
+    .DESCRIPTION
+    When running locally: Uses native PowerShell cmdlets (Write-Information, Write-Warning, Write-Error)
+    When running in HelloID: Uses HelloID's native Hid-Write-Status function
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Message,
+
+        [Parameter(Mandatory = $true)]
+        [String]
+        $Event
+    )
+    
+    if ($null -eq $portalBaseUrl) {
+        # Running locally - use native PowerShell cmdlets
+        switch ($Event) {
+            "Information" { Write-Information ($Message) -InformationAction Continue }
+            "Warning" { Write-Warning ($Message) -WarningAction Continue }
+            "Success" { Write-Information ($Message) -InformationAction Continue }
+            "Error" { Write-Error ($Message) -ErrorAction Continue }
+            "Critical" { Write-Error ($Message) -ErrorAction Continue }
+            "Failed" { Write-Error ($Message) -ErrorAction Continue }
+        }
+    }
+    else {
+        # Running in HelloID - use native HelloID function
+        Hid-Write-Status -Message $Message -Event $Event
+    }
+}
+
+function Write-SummaryMessage {
+    <#
+    .SYNOPSIS
+    Writes a summary message to the appropriate logging system.
+    
+    .DESCRIPTION
+    When running locally: Uses native PowerShell cmdlets (Write-Information, Write-Warning, Write-Error)
+    When running in HelloID: Uses HelloID's native Hid-Write-Summary function
+    #>
+    [cmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Message,
+
+        [Parameter(Mandatory = $true)]
+        [String]
+        $Event
+    )
+    
+    if ($null -eq $portalBaseUrl) {
+        # Running locally - use native PowerShell cmdlets
+        switch ($Event) {
+            "Information" { Write-Information ($Message) -InformationAction Continue }
+            "Warning" { Write-Warning ($Message) -WarningAction Continue }
+            "Success" { Write-Information ($Message) -InformationAction Continue }
+            "Error" { Write-Error ($Message) -ErrorAction Continue }
+            "Critical" { Write-Error ($Message) -ErrorAction Continue }
+            "Failed" { Write-Error ($Message) -ErrorAction Continue }
+        }
+    }
+    else {
+        # Running in HelloID - use native HelloID function
+        Hid-Write-Summary -Message $Message -Event $Event
+    }
+}
 
 function Remove-StringLatinCharacters {
     PARAM ([string]$String)
     [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
+}
+
+function Resolve-MicrosoftGraphAPIError {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [object]
+        $ErrorObject
+    )
+    process {
+        $httpErrorObj = [PSCustomObject]@{
+            ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
+            Line             = $ErrorObject.InvocationInfo.Line
+            ErrorDetails     = $ErrorObject.Exception.Message
+            FriendlyMessage  = $ErrorObject.Exception.Message
+        }
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
+        try {
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json -ErrorAction Stop)
+            if ($errorDetailsObject.error_description) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.error_description
+            }
+            elseif ($errorDetailsObject.error.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.code): $($errorDetailsObject.error.message)"
+            }
+            elseif ($errorDetailsObject.error.details.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.details.code): $($errorDetailsObject.error.details.message)"
+            }
+            else {
+                $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+            }
+        }
+        catch {
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+        }
+        Write-Output $httpErrorObj
+    }
+}
+
+function Resolve-HelloIDError {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [object]
+        $ErrorObject
+    )
+    process {
+        $httpErrorObj = [PSCustomObject]@{
+            ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
+            Line             = $ErrorObject.InvocationInfo.Line
+            ErrorDetails     = $ErrorObject.Exception.Message
+            FriendlyMessage  = $ErrorObject.Exception.Message
+        }
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq "System.Net.WebException") {
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
+        try {
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json)
+            # error message can be either in [resultMsg] or [message] or [textResult] or [error]
+            if ([bool]($errorDetailsObject.PSobject.Properties.name -eq "resultMsg")) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.resultMsg
+            }
+            elseif ([bool]($errorDetailsObject.PSobject.Properties.name -eq "message")) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.message
+            }
+            elseif ([bool]($errorDetailsObject.PSobject.Properties.name -eq "textResult")) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.textResult
+            }
+            elseif ([bool]($errorDetailsObject.PSobject.Properties.name -eq "error")) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.error
+            }
+            else {
+                $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails # Temporarily assignment
+            }
+        }
+        catch {
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+        }
+        Write-Output $httpErrorObj
+    }
 }
 
 function Resolve-HTTPError {
@@ -111,7 +293,7 @@ function Get-ErrorMessage {
     }
 }
 
-function Invoke-HIDRestmethod {
+function Invoke-HelloIDRestMethod {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
@@ -127,139 +309,211 @@ function Invoke-HIDRestmethod {
         [object]
         $Body,
 
-        [Parameter(Mandatory = $false)]
-        $PageSize,
-
         [string]
-        $ContentType = "application/json"
+        $ContentType = "application/json",
+
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary]
+        $Headers,
+
+        [Parameter()]
+        [Boolean]
+        $UsePaging = $false,
+
+        [Parameter()]
+        [Int]
+        $Skip = 0,
+
+        [Parameter()]
+        [Int]
+        $Take = 1000
     )
 
-    try {
-        Write-Verbose "Switching to TLS 1.2"
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
-
-        Write-Verbose "Setting authorization headers"
-        $apiKeySecret = "$($portalApiKey):$($portalApiSecret)"
-        $base64 = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($apiKeySecret))
-        $headers = [System.Collections.Generic.Dictionary[[String], [String]]]::new()
-        $headers.Add("Authorization", "Basic $base64")
-        $headers.Add("Content-Type", $ContentType)
-        $headers.Add("Accept", $ContentType)
-
-        $splatWebRequest = @{
-            Uri             = "$($script:PortalBaseUrl)/api/v1/$($Uri)"
-            Headers         = $headers
-            Method          = $Method
-            UseBasicParsing = $true
-            ErrorAction     = "Stop"
-        }
-        
-        if (-not[String]::IsNullOrEmpty($PageSize)) {
-            $data = [System.Collections.ArrayList]@()
-
-            $skip = 0
-            $take = $PageSize
-            Do {
-                $splatWebRequest["Uri"] = "$($script:PortalBaseUrl)/api/v1/$($Uri)?skip=$($skip)&take=$($take)"
-
-                Write-Verbose "Invoking [$Method] request to [$Uri]"
-                $response = $null
-                $response = Invoke-RestMethod @splatWebRequest -Verbose:$false
-                if (($response.PsObject.Properties.Match("pageData") | Measure-Object).Count -gt 0) {
-                    $dataset = $response.pageData
-                }
-                else {
-                    $dataset = $response
-                }
-
-                if ($dataset -is [array]) {
-                    [void]$data.AddRange($dataset)
-                }
-                else {
-                    [void]$data.Add($dataset)
-                }
-            
-                $skip += $take
-            }until(($dataset | Measure-Object).Count -ne $take)
-
-            return $data
-        }
-        else {
-            if ($Body) {
-                Write-Verbose "Adding body to request"
-                $splatWebRequest["Body"] = ([System.Text.Encoding]::UTF8.GetBytes($body))
+    process {
+        try {
+            $splatParams = @{
+                Uri             = $Uri
+                Headers         = $Headers
+                Method          = $Method
+                ContentType     = $ContentType
+                UseBasicParsing = $true
+                Verbose         = $false
+                ErrorAction     = "Stop"
             }
 
-            Write-Verbose "Invoking [$Method] request to [$Uri]"
-            $response = $null
-            $response = Invoke-RestMethod @splatWebRequest -Verbose:$false
+            if ($Body) {
+                $splatParams["Body"] = ([System.Text.Encoding]::UTF8.GetBytes($Body))
+            }
 
-            return $response
+            if ($UsePaging -eq $true) {
+                $result = [System.Collections.ArrayList]@()
+                $startUri = $splatParams.Uri
+                do {
+                    # Determine separator based on whether URI already contains query parameters
+                    $separator = if ($startUri -match '\?') { '&' } else { '?' }
+                    $splatParams["Uri"] = $startUri + "$($separator)take=$($take)&skip=$($skip)"
+                    $response = (Invoke-RestMethod @splatParams)
+                    if ([bool]($response.PSobject.Properties.name -eq "data")) {
+                        $response = $response.data
+                    }
+                    if ($response -is [array]) {
+                        [void]$result.AddRange($response)
+                    }
+                    else {
+                        [void]$result.Add($response)
+                    }
+        
+                    $skip += $take
+                } while (($response | Measure-Object).Count -eq $take)
+            }
+            else {
+                $result = Invoke-RestMethod @splatParams
+            }
+
+            Write-Output $result
         }
-
-    }
-    catch {
-        throw $_
+        catch {
+            throw $_
+        }
     }
 }
 
 
-function New-AuthorizationHeaders {
+function Get-MSEntraAccessToken {
     [CmdletBinding()]
-    [OutputType([System.Collections.Generic.Dictionary[[String], [String]]])]
     param(
-        [parameter(Mandatory)]
+        [Parameter(Mandatory)]
+        [ValidateNotNull()]
+        $Certificate,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
         [string]
-        $TenantId,
-
-        [parameter(Mandatory)]
+        $AppId,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
         [string]
-        $ClientId,
-
-        [parameter(Mandatory)]
-        [string]
-        $ClientSecret
+        $TenantId
     )
     try {
-        Write-Verbose "Creating Access Token"
-        $authUri = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
-    
-        $body = @{
-            grant_type    = "client_credentials"
-            client_id     = "$ClientId"
-            client_secret = "$ClientSecret"
-            resource      = "https://graph.microsoft.com"
+        # Get the DER encoded bytes of the certificate
+        $derBytes = $Certificate.RawData
+
+        # Compute the SHA-256 hash of the DER encoded bytes
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $sha256.ComputeHash($derBytes)
+        $base64Thumbprint = [System.Convert]::ToBase64String($hashBytes).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Create a JWT (JSON Web Token) header
+        $header = @{
+            'alg'      = 'RS256'
+            'typ'      = 'JWT'
+            'x5t#S256' = $base64Thumbprint
+        } | ConvertTo-Json
+        $base64Header = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($header))
+
+        # Calculate the Unix timestamp (seconds since 1970-01-01T00:00:00Z) for 'exp', 'nbf' and 'iat'
+        $currentUnixTimestamp = [math]::Round(((Get-Date).ToUniversalTime() - ([datetime]'1970-01-01T00:00:00Z').ToUniversalTime()).TotalSeconds)
+
+        # Create a JWT payload
+        $payload = [Ordered]@{
+            'iss' = "$($AppId)"
+            'sub' = "$($AppId)"
+            'aud' = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            'exp' = ($currentUnixTimestamp + 3600) # Expires in 1 hour
+            'nbf' = ($currentUnixTimestamp - 300) # Not before 5 minutes ago
+            'iat' = $currentUnixTimestamp
+            'jti' = [Guid]::NewGuid().ToString()
+        } | ConvertTo-Json
+        $base64Payload = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($payload)).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Extract the private key from the certificate
+        $rsaPrivate = $Certificate.PrivateKey
+        $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new()
+        $rsa.ImportParameters($rsaPrivate.ExportParameters($true))
+
+        # Sign the JWT
+        $signatureInput = "$base64Header.$base64Payload"
+        $signature = $rsa.SignData([Text.Encoding]::UTF8.GetBytes($signatureInput), 'SHA256')
+        $base64Signature = [System.Convert]::ToBase64String($signature).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Create the JWT token
+        $jwtToken = "$($base64Header).$($base64Payload).$($base64Signature)"
+
+        $createEntraAccessTokenBody = @{
+            grant_type            = 'client_credentials'
+            client_id             = $AppId
+            client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+            client_assertion      = $jwtToken
+            resource              = 'https://graph.microsoft.com'
         }
-    
-        $Response = Invoke-RestMethod -Method POST -Uri $authUri -Body $body -ContentType 'application/x-www-form-urlencoded'
-        $accessToken = $Response.access_token
-    
-        #Add the authorization header to the request
-        Write-Verbose 'Adding Authorization headers'
 
-        $headers = [System.Collections.Generic.Dictionary[[String], [String]]]::new()
-        $headers.Add('Authorization', "Bearer $accesstoken")
-        $headers.Add('Accept', 'application/json')
-        $headers.Add('Content-Type', 'application/json')
-        # Needed to filter on specific attributes (https://docs.microsoft.com/en-us/graph/aad-advanced-queries)
-        $headers.Add('ConsistencyLevel', 'eventual')
+        $createEntraAccessTokenSplatParams = @{
+            Uri         = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            Body        = $createEntraAccessTokenBody
+            Method      = 'POST'
+            ContentType = 'application/x-www-form-urlencoded'
+            Verbose     = $false
+            ErrorAction = 'Stop'
+        }
 
-        Write-Output $headers  
+        $createEntraAccessTokenResponse = Invoke-RestMethod @createEntraAccessTokenSplatParams
+        Write-Output $createEntraAccessTokenResponse.access_token
     }
     catch {
-        throw $_
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+
+function Get-MSEntraCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificateBase64String,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificatePassword
+    )
+    try {
+        $rawCertificate = [system.convert]::FromBase64String($CertificateBase64String)
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+        Write-Output $certificate
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
     }
 }
 #endregion functions
 
 #region script
-Hid-Write-Status -Event Information -Message "Starting synchronization of Entra ID to HelloID Self service Producs"
-Hid-Write-Status -Event Information -Message "-----------[Entra ID]-----------"
+Write-StatusMessage -Event Information -Message "Starting synchronization of Entra ID Owners to HelloID Groups"
+Write-StatusMessage -Event Information -Message "-----------[Entra ID]-----------"
 # Get Entra ID Groups
 try {  
-    $headers = New-AuthorizationHeaders -TenantId $EntraTenantId -ClientId $EntraAppID -ClientSecret $EntraAppSecret
+    # Convert base64 certificate string to certificate object
+    $actionMessage = "converting base64 certificate string to certificate object"
+    $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
 
-    $properties = @(
+    # Create access token
+    $actionMessage = "creating access token"
+    $entraToken = Get-MSEntraAccessToken -Certificate $certificate -AppId $EntraIdAppId -TenantId $EntraIdTenantId
+
+    # Create headers
+    $actionMessage = "creating headers"
+    $entraIDHeaders = @{
+        "Authorization"    = "Bearer $($entraToken)"
+        "Accept"           = "application/json"
+        "Content-Type"     = "application/json"
+        "ConsistencyLevel" = "eventual" # Needed to filter on specific attributes (https://docs.microsoft.com/en-us/graph/aad-advanced-queries)
+    }
+
+
+    $entraIDGroupPropertiesToRetrieve = @(
         "id"
         , "displayName"
         , "description"
@@ -267,15 +521,25 @@ try {
         , "groupTypes"
         , "mail"
     )
-    $select = "`$select=$($properties -join ",")"
-
+    $select = "`$select=$($entraIDGroupPropertiesToRetrieve -join ",")"
+    
+    # Get Entra ID groups
+    $actionMessage = "querying Entra ID groups that match filter [$entraIDGroupsSearchFilter] and retrieving properties [$($entraIDGroupPropertiesToRetrieve -join ", ")]"
     $m365GroupFilter = "groupTypes/any(c:c+eq+'Unified')"
     $securityGroupFilter = "NOT(groupTypes/any(c:c+eq+'DynamicMembership')) and onPremisesSyncEnabled eq null and mailEnabled eq false and securityEnabled eq true"
-    $managableGroupsFilter = "`$filter=($m365GroupFilter or $securityGroupFilter) and resourceProvisioningOptions/Any(x:x eq 'Team')"
+    $managableGroupsFilter = "($m365GroupFilter or $securityGroupFilter)"
+    # Example how to filter on teams
+    # $managableGroupsFilter = "`$filter=($m365GroupFilter or $securityGroupFilter) and resourceProvisioningOptions/Any(x:x eq 'Team')"
   
+    # Add additional filter if specified
+    if (-not [string]::IsNullOrEmpty($entraIDGroupsSearchFilter)) {
+        $managableGroupsFilter = "$managableGroupsFilter and $entraIDGroupsSearchFilter"
+    }
+    
+    $select = "`$select=$($entraIDGroupPropertiesToRetrieve -join ",")"
     $entraIDQuerySplatParams = @{
-        Uri         = "$($MSGraphBaseUri)/v1.0/groups?$managableGroupsFilter and $entraIDGroupsSearchFilter&$select&`$top=999&`$count=true"
-        Headers     = $headers
+        Uri         = "$($MSGraphBaseUri)/v1.0/groups?`$filter=$managableGroupsFilter&$select&`$top=999&`$count=true"
+        Headers     = $entraIDHeaders
         Method      = 'GET'
         ErrorAction = 'Stop'
     }
@@ -293,7 +557,7 @@ try {
     while (![string]::IsNullOrEmpty($getEntraIDGroupsResponse.'@odata.nextLink')) {
         $entraIDQuerySplatParams = @{
             Uri         = $getEntraIDGroupsResponse.'@odata.nextLink'
-            Headers     = $headers
+            Headers     = $entraIDHeaders
             Method      = 'GET'
             ErrorAction = 'Stop'
         }
@@ -307,134 +571,110 @@ try {
         }
     }
 
-	$entraIdGroups | Add-Member -MemberType NoteProperty -Name Users -Value $null
+    Write-StatusMessage -Event Success -Message "Successfully queried Entra ID groups that match filter [$entraIDGroupsSearchFilter]. Result count: $(($entraIdGroups | Measure-Object).Count)"
+    $entraIdGroups | Add-Member -MemberType NoteProperty -Name Users -Value $null
 
     $entraIdGroupsInScope = [System.Collections.Generic.List[Object]]::New()
-    foreach ($entraIdGroup in $entraIdGroups) {
-		
-		#Hid-Write-Status -Event Information -Message "Searching owners for $($entraIdGroup.displayName) with id $($entraIdGroup.id)"
-		
-		$entraIDOwnerQuerySplatParams = @{
-			Uri         = "$($MSGraphBaseUri)/v1.0/groups/$($entraIdGroup.id)/owners"
-			Headers     = $headers
-			Method      = 'GET'
-			ErrorAction = 'Stop'
-		}
-
-		#$entraIdGroups = [System.Collections.ArrayList]@()
-		$getOwnersResponse = $null
-		$getOwnersResponse = Invoke-RestMethod @entraIDOwnerQuerySplatParams -Verbose:$false
-		
-		$entraIdGroup.Users = $getOwnersResponse.value
-		
-        # Custom - Only process groups with a description
-        if ([string]::IsNullOrEmpty($entraIdGroup.description)) {
-            if ($verboseLogging -eq $true) {
-                Write-Verbose "No description set in Entra ID for Entra ID group [$($entraIdGroup)]"
-            }
-
+    foreach ($entraIdGroup in $entraIdGroups) {	
+        $actionMessage = "querying Entra ID group [$($entraIdGroup.displayName) ($($entraIdGroup.id))] memberships"
+        $entraIDOwnerQuerySplatParams = @{
+            Uri         = "$($MSGraphBaseUri)/v1.0/groups/$($entraIdGroup.id)/owners"
+            Headers     = $entraIDHeaders
+            Method      = 'GET'
+            ErrorAction = 'Stop'
         }
-        else {
-            [void]$entraIdGroupsInScope.Add($entraIdGroup)
+
+        $getOwnersResponse = $null
+        $getOwnersResponse = Invoke-RestMethod @entraIDOwnerQuerySplatParams -Verbose:$false
+        $entraIdGroup.Users = $getOwnersResponse.value
+
+        if ($verboseLogging -eq $true) {
+            Write-Verbose "Successfully queried Entra ID group [$($entraIdGroup.displayName) ($($entraIdGroup.id))] with owners. Result count: $(($entraIdGroup.Users | Measure-Object).Count)"
         }
+		        
+        [void]$entraIdGroupsInScope.Add($entraIdGroup)
     }
 
     if (($entraIdGroupsInScope | Measure-Object).Count -eq 0) {
         throw "No Entra ID Groups have been found"
     }
 
-    Hid-Write-Status -Event Success -Message "Successfully queried Entra ID groups. Result count: $(($entraIdGroupsInScope | Measure-Object).Count)"
+    Write-StatusMessage -Event Success -Message "Successfully queried Entra ID groups with members. Result count: $(($entraIdGroupsInScope | Measure-Object).Count)"
 }
 catch {
     $ex = $PSItem
-    $errorMessage = Get-ErrorMessage -ErrorObject $ex
-
-    Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-
-    throw "Error querying Entra ID groups that match filter [$($entraIDGroupsSearchFilter)]. Error Message: $($errorMessage.AuditErrorMessage)"
+    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $errorObj = Resolve-MicrosoftGraphAPIError -ErrorObject $ex
+        $errorMessage = "Error $($actionMessage). Error: $($errorObj.FriendlyMessage)"
+        $warningMessage = "Error at Line [$($errorObj.ScriptLineNumber)]: $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+    }
+    else {
+        $errorMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+    }
+    Write-StatusMessage -Event "Error" -Message $warningMessage
+    Write-SummaryMessage -Event "Failed" -Message $errorMessage
+    exit
 }
 
-Hid-Write-Status -Event Information -Message "------[HelloID]------"
-#region Get HelloID Users
+Write-StatusMessage -Event Information -Message "------[HelloID]------"
+#region Get HelloID
 try {
-    Write-Verbose "Querying Users from HelloID"
+    # Create authorization headers with HelloID API key
+    $actionMessage = "creating authorization headers with HelloID API key"
 
-    $splatWebRequest = @{
-        Method   = "GET"
-        Uri      = "users"
-        PageSize = 1000
+    $pair = "$($helloIDPortalApiKey):$($helloIDPortalApiSecret)"
+    $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
+    $base64 = [System.Convert]::ToBase64String($bytes)
+    $key = "Basic $base64"
+    $helloIDHeaders = @{"authorization" = $Key }
+
+    $actionMessage = "querying HelloID users"
+    $getHelloIDUsersSplatParams = @{
+        Uri       = "$($helloIDPortalBaseUrl)/api/v1/users"
+        Method    = 'GET'
+        Headers   = $helloIDHeaders
+        UsePaging = $true
     }
-    $helloIDUsers = Invoke-HIDRestMethod @splatWebRequest
 
+    $helloIDUsers = Invoke-HelloIDRestMethod @getHelloIDUsersSplatParams
     $helloIDUsersGroupedOnUserName = $helloIDUsers | Group-Object -Property "userName" -AsHashTable -AsString
     $helloIDUsersGroupedOnUserGUID = $helloIDUsers | Group-Object -Property "userGUID" -AsHashTable -AsString
 
-    Hid-Write-Status -Event Success -Message "Successfully queried Users from HelloID. Result count: $(($helloIDUsers | Measure-Object).Count)"
-}
-catch {
-    $ex = $PSItem
-    $errorMessage = Get-ErrorMessage -ErrorObject $ex
+    Write-StatusMessage -Event Success -Message "Successfully queried users from HelloID. Result count: $(($helloIDUsers | Measure-Object).Count)"
 
-    Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-
-    throw "Error querying Users from HelloID. Error Message: $($errorMessage.AuditErrorMessage)"
-}
-#endregion Get HelloID Users
-
-#region Get HelloID Groups
-try {
-    Write-Verbose "Querying Groups from HelloID"
-
-    $splatWebRequest = @{
-        Method   = "GET"
-        Uri      = "groups"
-        PageSize = 1000
+    $actionMessage = "querying HelloID groups"
+    $getHelloIDGroupsSplatParams = @{
+        Uri       = "$($helloIDPortalBaseUrl)/api/v1/groups"
+        Method    = 'GET'
+        Headers   = $helloIDHeaders
+        UsePaging = $true
     }
-    $helloIDGroups = Invoke-HIDRestMethod @splatWebRequest
+  
+    $helloIDGroups = Invoke-HelloIDRestMethod @getHelloIDGroupsSplatParams
 
-    Hid-Write-Status -Event Success -Message "Successfully queried Groups from HelloID. Result count: $(($helloIDGroups | Measure-Object).Count)"
-}
-catch {
-    $ex = $PSItem
-    $errorMessage = Get-ErrorMessage -ErrorObject $ex
+    Write-StatusMessage -Event Success -Message "Successfully queried groups from HelloID. Result count: $(($helloIDGroups | Measure-Object).Count)"
 
-    Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-
-    throw "Error querying Groups from HelloID. Error Message: $($errorMessage.AuditErrorMessage)"
-}
-#endregion Get HelloID Groups
-
-#region Get members of HelloID groups
-try {
     [System.Collections.ArrayList]$helloIDGroupsWithMembers = @()
-    Write-Verbose "Querying HelloID groups with members"
     foreach ($helloIDGroup in $helloIDGroups) {
-        #region Get HelloID users that are member of HelloID group
-        try {
-            Write-Verbose "Querying HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] with members"
+        $actionMessage = "querying HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] memberships"
 
-            $splatWebRequest = @{
-                Method   = "GET"
-                Uri      = "groups/$($helloIDGroup.groupGuid)"
-                PageSize = 1000
-            }
-            $helloIDGroup = Invoke-HIDRestMethod @splatWebRequest
-
-            [void]$helloIDGroupsWithMembers.Add($helloIDGroup)
-
-            if ($verboseLogging -eq $true) {
-                Write-Verbose "Successfully queried HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] with members. Result count: $(($helloIDGroup.users | Measure-Object).Count)"
-            }
+        $getHelloIDGroupsMembershipsSplatParams = @{
+            Uri       = "$($helloIDPortalBaseUrl)/api/v1/groups/$($helloIDGroup.groupGuid)"
+            Method    = 'GET'
+            Headers   = $helloIDHeaders
+            UsePaging = $true
         }
-        catch {
-            $ex = $PSItem
-            $errorMessage = Get-ErrorMessage -ErrorObject $ex
-        
-            Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-        
-            throw "Error querying HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] with members. Error Message: $($errorMessage.AuditErrorMessage)"
+
+        $helloIDGroupMembers = Invoke-HelloIDRestMethod @getHelloIDGroupsMembershipsSplatParams
+
+        [void]$helloIDGroupsWithMembers.Add($helloIDGroupMembers)
+
+        if ($verboseLogging -eq $true) {
+            Write-Verbose "Successfully queried HelloID group [$($helloIDGroup.name) ($($helloIDGroup.groupGuid))] with members. Result count: $(($helloIDGroup.users | Measure-Object).Count)"
         }
-        #endregion Get HelloID users that are member of HelloID group
+        
     }
 
     $helloIDGroupsWithMembers | Add-Member -MemberType NoteProperty -Name SourceAndName -Value $null
@@ -446,31 +686,41 @@ try {
     }
 
     $helloIDGroupsWithMembers = $helloIDGroupsWithMembers | Where-Object { $_.SourceAndName -like "$($resourceOwnerGroupSource)/*" }
-
     $helloIDGroupsWithMembersGroupedBySourceAndName = $helloIDGroupsWithMembers | Group-Object -Property "SourceAndName" -AsHashTable -AsString
 
-    Hid-Write-Status -Event Success -Message "Successfully queried HelloID groups with members. Result count: $(($helloIDGroupsWithMembers.users | Measure-Object).Count)"
+    Write-StatusMessage -Event Success -Message "Successfully queried HelloID groups with members. Result count: $(($helloIDGroupsWithMembers.users | Measure-Object).Count)"
 }
 catch {
     $ex = $PSItem
-    $errorMessage = Get-ErrorMessage -ErrorObject $ex
-
-    Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-
-    throw "Error querying HelloID users that are member of HelloID groups. Error Message: $($errorMessage.AuditErrorMessage)"
+    if ($($ex.Exception.GetType().FullName -eq "Microsoft.PowerShell.Commands.HttpResponseException") -or
+        $($ex.Exception.GetType().FullName -eq "System.Net.WebException")) {
+        $errorObj = Resolve-HelloIDError -ErrorObject $ex
+        $warningMessage = "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+        $errorMessage = "Error $($actionMessage). Error: $($errorObj.FriendlyMessage)"
+    }
+    else {
+        $warningMessage = "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+        $errorMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+    }
+    Write-StatusMessage -Event "Error" -Message $warningMessage
+    Write-SummaryMessage -Event "Failed" -Message $errorMessage
+    exit
 }
+#endregion Get HelloID
+
 #endregionGet members of HelloID groups
 
-Hid-Write-Status -Event Information -Message "------[Calculations of combined data]------"
+Write-StatusMessage -Event Information -Message "------[Calculations of combined data]------"
 # Calculate new and obsolete groupmemberships
 try {
     # Define existing & new groupmemberships
+    $actionMessage = "calculating new and obsolete groupmemberships"
     $existingGroupMembershipObjects = [System.Collections.ArrayList]@()
     $newGroupMembershipObjects = [System.Collections.ArrayList]@()
     foreach ($entraIdGroupInScope in $entraIdGroupsInScope) {
 		
         # Define Resource owner Group
-        $resourceOwnerGroupName = "$($resourceOwnerGroupSource)/" + "$($resourceOwnerGroupPrefix)" + ($entraIdGroupInScope.mail).split("@")[0] + "$($resourceOwnerGroupSuffix)"
+        $resourceOwnerGroupName = "$($resourceOwnerGroupSource)/" + "$($resourceOwnerGroupPrefix)" + "$($entraIdGroupInScope.displayName)" + "$($resourceOwnerGroupSuffix)"
 
         # Get HelloID Resource Owner Group
         $helloIDResourceOwnerGroup = $null
@@ -479,7 +729,7 @@ try {
             $helloIDResourceOwnerGroup = $helloIDGroupsWithMembersGroupedBySourceAndName["$($resourceOwnerGroupName)"]
             if ($null -eq $helloIDResourceOwnerGroup) {
                 if ($verboseLogging -eq $true) {
-                    Hid-Write-Status -Event Information -Message "Resource owner group [$($resourceOwnerGroupName)] for Shared Mailbox [$($entraIdGroupInScope.displayName)] not found in HelloID"
+                    Write-StatusMessage -Event Information -Message "Resource owner group [$($resourceOwnerGroupName)] for Group [$($entraIdGroupInScope.displayName)] not found in HelloID"
                 }
 
                 # Skip further actions for this record
@@ -488,7 +738,7 @@ try {
         }
         else {
             if ($verboseLogging -eq $true) {
-                Hid-Write-Status -Event Information -Message "No Resource owner group name provided for Team [$($entraIdGroupInScope.displayName)]"
+                Write-StatusMessage -Event Information -Message "No Resource owner group name provided for Group [$($entraIdGroupInScope.displayName)]"
             }
         }
 
@@ -499,7 +749,7 @@ try {
             $helloIDUser = $helloIDUsersGroupedOnUserGUID["$($helloIDResourceOwnerGroupUser)"]
             if ($null -eq $helloIDUser) {
                 if ($verboseLogging -eq $true) {
-                    Hid-Write-Status -Event Information -Message "No HelloID user found for Teams Resource owner group [$($helloIDResourceOwnerGroupUser)]"
+                    Write-StatusMessage -Event Information -Message "No HelloID user found for Group Resource owner group [$($helloIDResourceOwnerGroupUser)]"
                 }
 
                 # Skip further actions for this record
@@ -511,7 +761,7 @@ try {
                 GroupId      = "$($helloIDResourceOwnerGroup.groupGuid)"
                 UserUsername = "$($helloIDUser.userName)"
                 UserId       = "$($helloIDUser.userGUID)"
-				CombinedId  	 = "$($helloIDResourceOwnerGroup.groupGuid)" + "_" + "$($helloIDUser.userGUID)"
+                CombinedId   = "$($helloIDResourceOwnerGroup.groupGuid)" + "_" + "$($helloIDUser.userGUID)"
             }
 			
             [void]$existingGroupMembershipObjects.Add($existingGroupMembershipObject)
@@ -520,14 +770,13 @@ try {
         # Define new groupmemberships
         foreach ($owner in $entraIdGroupInScope.Users) {
 			
-			
             # Get HelloID User
             $helloIDUser = $null
             if (-not[string]::IsNullOrEmpty($owner.UserPrincipalName)) {
                 $helloIDUser = $helloIDUsersGroupedOnUserName["$($owner.UserPrincipalName)"]
                 if ($null -eq $helloIDUser) {
                     if ($verboseLogging -eq $true) {
-                        Hid-Write-Status -Event Information -Message "No HelloID user found for Teams Resource owner group [$($owner.UserPrincipalName)]"
+                        Write-StatusMessage -Event Information -Message "No HelloID user found for Teams Resource owner group [$($owner.UserPrincipalName)]"
                     }
 
                     # Skip further actions for this record
@@ -536,7 +785,7 @@ try {
             }
             else {
                 if ($verboseLogging -eq $true) {
-                    Hid-Write-Status -Event Information -Message "No UserPrincipalName provided for full access user [$($owner.Id)]"
+                    Write-StatusMessage -Event Information -Message "No UserPrincipalName provided for full access user [$($owner.Id)]"
                 }
             }
 			
@@ -546,7 +795,7 @@ try {
                 GroupId      = "$($helloIDResourceOwnerGroup.groupGuid)"
                 UserUsername = "$($helloIDUser.userName)"
                 UserId       = "$($helloIDUser.userGUID)"
-				CombinedId  	 = "$($helloIDResourceOwnerGroup.groupGuid)" + "_" + "$($helloIDUser.userGUID)"
+                CombinedId   = "$($helloIDResourceOwnerGroup.groupGuid)" + "_" + "$($helloIDUser.userGUID)"
             }
 
             [void]$newGroupMembershipObjects.Add($newGroupMembershipObject)
@@ -571,79 +820,71 @@ try {
 catch {
     $ex = $PSItem
     $errorMessage = Get-ErrorMessage -ErrorObject $ex
-
-    Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-
-    throw "Error calculating new and obsolete groupmemberships. Error Message: $($errorMessage.AuditErrorMessage)"
+    $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
+    $errorMessage = "Error $($actionMessage). Error: $($errorMessage.AuditErrorMessage)"
+    Write-StatusMessage -Event "Error" -Message $warningMessage
+    Write-SummaryMessage -Event "Failed" -Message $errorMessage
+    exit
 }
 
-Hid-Write-Status -Event Information -Message "------[Summary]------"
-Hid-Write-Status -Event Information -Message "Total EntraId Groups in scope [$(($entraIdGroupsInScope.Users | Measure-Object).Count)]"
+Write-StatusMessage -Event Information -Message "------[Summary]------"
+Write-StatusMessage -Event Information -Message "Total EntraId Groups in scope [$(($entraIdGroupsInScope.Users | Measure-Object).Count)]"
 
-Hid-Write-Status -Event Information -Message "New HelloID Resource Owner Groupmembership(s) that will be granted [$(($newGroupMemberships | Measure-Object).Count)]"
+Write-StatusMessage -Event Information -Message "New HelloID Resource Owner Groupmembership(s) that will be granted [$(($newGroupMemberships | Measure-Object).Count)]"
 
 if ($removeMembers) {
-    Hid-Write-Status -Event Information "Obsolete HelloID Resource Owner Groupmembership(s) that will be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
+    Write-StatusMessage -Event Information "Obsolete HelloID Resource Owner Groupmembership(s) that will be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
 }
 else {
-    Hid-Write-Status -Event Information -Message "Obsolete HelloID Resource Owner Groupmembership(s) that won't be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
+    Write-StatusMessage -Event Information -Message "Obsolete HelloID Resource Owner Groupmembership(s) that won't be revoked [$(($obsoleteGroupMemberships | Measure-Object).Count)]"
 }
 
-Hid-Write-Status -Event Information -Message "------[Processing]------------------"
+Write-StatusMessage -Event Information -Message "------[Processing]------------------"
 try {
     $addUserToGroupSuccess = 0
     $addUserToGroupError = 0
     foreach ($newGroupMembership in $newGroupMemberships) {
         # Add HelloID User to HelloID Group
-        try {
+        $actionMessage = "adding memberships to group [$($newGroupMembership.GroupId)]"
+
+        if ($verboseLogging -eq $true) {
+            Write-Verbose "Adding HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
+        }
+
+        $addUserToGroupBody = [PSCustomObject]@{
+            UserGUID = "$($newGroupMembership.UserId)"
+        }
+        $body = ($addUserToGroupBody | ConvertTo-Json -Depth 10)
+
+        $postHelloIDAddMembershipsSplatParams = @{
+            Uri     = "$($helloIDPortalBaseUrl)/api/v1/groups/$($newGroupMembership.GroupId)/users"
+            Method  = 'POST'
+            Headers = $helloIDHeaders
+            Body    = $body
+        }
+
+        if ($dryRun -eq $false) {
+            $addUserToGroupResult = Invoke-HelloIDRestMethod @postHelloIDAddMembershipsSplatParams
+            $addUserToGroupSuccess++
+
             if ($verboseLogging -eq $true) {
-                Write-Verbose "Adding HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
-            }
-
-            $addUserToGroupBody = [PSCustomObject]@{
-                UserGUID = "$($newGroupMembership.UserId)"
-            }
-            $body = ($addUserToGroupBody | ConvertTo-Json -Depth 10)
-            $splatWebRequest = @{
-                Uri    = "groups/$($newGroupMembership.GroupId)/users"
-                Method = 'POST'
-                Body   = $body
-            }
-
-            if ($dryRun -eq $false) {
-                $addUserToGroupResult = Invoke-HIDRestMethod @splatWebRequest
-                $addUserToGroupSuccess++
-
-                if ($verboseLogging -eq $true) {
-                    Write-Verbose "Successfully added HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
-                }
-            }
-            else {
-                if ($verboseLogging -eq $true) {
-                    Write-Verbose "DryRun: Would add HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
-					Hid-Write-Status -Event Information -Message "DryRun: Would add HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
-                }
+                Write-Verbose "Successfully added HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
             }
         }
-        catch {
-            $addUserToGroupError++
-
-            $ex = $PSItem
-            $errorMessage = Get-ErrorMessage -ErrorObject $ex
-            
-            Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-            
-            throw "Error adding HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]. Error Message: $($errorMessage.AuditErrorMessage)"
+        else {
+            if ($verboseLogging -eq $true) {
+                Write-StatusMessage -Event Information -Message "DryRun: Would add HelloID user [$($newGroupMembership.UserUsername) ($($newGroupMembership.UserId))] to HelloID group [$($newGroupMembership.GroupName) ($($newGroupMembership.GroupId))]"
+            }
         }
     }
     if ($dryRun -eq $false) {
         if ($addUserToGroupSuccess -ge 1 -or $addUserToGroupError -ge 1) {
-            Hid-Write-Status -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
-            Hid-Write-Summary -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
+            Write-StatusMessage -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
+            Write-SummaryMessage -Event Information -Message "Added HelloID users to HelloID groups. Success: $($addUserToGroupSuccess). Error: $($addUserToGroupError)"
         }
     }
     else {
-        Hid-Write-Status -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
+        Write-StatusMessage -Event Warning -Message "DryRun: Would add [$(($newGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
     }
 
     if ($removeMembers -eq $true) {
@@ -651,69 +892,70 @@ try {
         $removeUserFromGroupError = 0
         foreach ($obsoleteGroupMembership in $obsoleteGroupMemberships) {
             # Remove HelloID User from HelloID Group
-            try {
+            $actionMessage = "removing user [$($obsoleteGroupMembership.UserId)] from group [$($obsoleteGroupMembership.GroupId)]"
+
+            if ($verboseLogging -eq $true) {
+                Write-Verbose "Removing HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
+            }
+
+            $deleteHelloIDRemoveMembershipsSplatParams = @{
+                Uri     = "$($helloIDPortalBaseUrl)/api/v1/groups/$($obsoleteGroupMembership.GroupId)/users/$($obsoleteGroupMembership.UserId)"
+                Method  = 'DELETE'
+                Headers = $helloIDHeaders
+            }
+
+            if ($dryRun -eq $false) {
+                $removeUserToGroupResult = Invoke-HelloIDRestMethod @deleteHelloIDRemoveMembershipsSplatParams
+                $removeUserFromGroupSuccess++
+
                 if ($verboseLogging -eq $true) {
-                    Write-Verbose "Removing HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
-                }
-
-                $splatWebRequest = @{
-                    Uri    = "groups/$($obsoleteGroupMembership.GroupId)/users/$($obsoleteGroupMembership.UserId)"
-                    Method = 'DELETE'
-                }
-
-                if ($dryRun -eq $false) {
-                    $removeUserToGroupResult = Invoke-HIDRestMethod @splatWebRequest
-                    $removeUserFromGroupSuccess++
-
-                    if ($verboseLogging -eq $true) {
-                        Write-Verbose "Successfully removed HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
-                    }
-                }
-                else {
-                    if ($verboseLogging -eq $true) {
-                        Write-Verbose "DryRun: Would remove HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
-                    }
+                    Write-Verbose "Successfully removed HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
                 }
             }
-            catch {
-                $removeUserFromGroupError++
-
-                $ex = $PSItem
-                $errorMessage = Get-ErrorMessage -ErrorObject $ex
-            
-                Hid-Write-Status -Event Error -Message "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-            
-                throw "Error removing HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]. Error Message: $($errorMessage.AuditErrorMessage)"
+            else {
+                if ($verboseLogging -eq $true) {
+                    Write-StatusMessage -Event Information -Message "DryRun: Would remove HelloID user [$($obsoleteGroupMembership.UserUsername) ($($obsoleteGroupMembership.UserId))] to HelloID group [$($obsoleteGroupMembership.GroupName) ($($obsoleteGroupMembership.GroupId))]"
+                }
             }
         }
         if ($dryRun -eq $false) {
             if ($removeUserFromGroupSuccess -ge 1 -or $removeUserFromGroupError -ge 1) {
-                Hid-Write-Status -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
-                Hid-Write-Summary -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
+                Write-StatusMessage -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
+                Write-SummaryMessage -Event Information -Message "Removed HelloID users from HelloID groups. Success: $($removeUserFromGroupSuccess). Error: $($removeUserFromGroupError)"
             }
         }
         else {
-            Hid-Write-Status -Event Warning -Message "DryRun: Would remove [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users from HelloID groups"
+            Write-StatusMessage -Event Warning -Message "DryRun: Would remove [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users from HelloID groups"
         }
     }
     else {
-        Hid-Write-Status -Event Warning -Message "Option to remove members is set to [$removeMembers]. Skipped removing [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
+        Write-StatusMessage -Event Warning -Message "Option to remove members is set to [$removeMembers]. Skipped removing [$(($obsoleteGroupMemberships | Measure-Object).Count)] HelloID users to HelloID groups"
     }
 
     if ($dryRun -eq $false) {
-        Hid-Write-Status -Event Success -Message "Successfully synchronized [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Teams to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
-        Hid-Write-Summary -Event Success -Message "Successfully synchronized [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Teams to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-StatusMessage -Event Success -Message "Successfully synchronized [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Groups to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-SummaryMessage -Event Success -Message "Successfully synchronized [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Groups to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
     }
     else {
-        Hid-Write-Status -Event Success -Message "DryRun: Would synchronize [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Teams to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
-        Hid-Write-Summary -Event Success -Message "DryRun: Would synchronize [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Teams to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-StatusMessage -Event Success -Message "DryRun: Would synchronize [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Groups to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+        Write-SummaryMessage -Event Success -Message "DryRun: Would synchronize [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Groups to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
     }
 }
 catch {
-    Hid-Write-Status -Event Error -Message "Error synchronization of [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Teams to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
-    Hid-Write-Status -Event Error -Message "Error at Line [$($_.InvocationInfo.ScriptLineNumber)]: $($_.InvocationInfo.Line)."
-    Hid-Write-Status -Event Error -Message "Exception message: $($_.Exception.Message)"
-    Hid-Write-Status -Event Error -Message "Exception details: $($_.errordetails)"
-    Hid-Write-Summary -Event Failed -Message "Error synchronization of [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Teams to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+    $ex = $PSItem
+    if ($($ex.Exception.GetType().FullName -eq "Microsoft.PowerShell.Commands.HttpResponseException") -or
+        $($ex.Exception.GetType().FullName -eq "System.Net.WebException")) {
+        $errorObj = Resolve-HelloIDError -ErrorObject $ex
+        $warningMessage = "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+        $errorMessage = "Error $($actionMessage). Error: $($errorObj.FriendlyMessage)"
+    }
+    else {
+        $warningMessage = "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+        $errorMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+    }
+    Write-StatusMessage -Event "Error" -Message $warningMessage
+    Write-SummaryMessage -Event "Failed" -Message $errorMessage
+    Write-StatusMessage -Event Error -Message "Error synchronization of [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Groups to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
+    Write-SummaryMessage -Event Failed -Message "Error synchronization of [$(($entraIdGroupsInScope.Users | Measure-Object).Count)] Owners of Groups to [$totalGroupMemberships] HelloID ResourceOwner Groupmemberships"
 }
 #endregion

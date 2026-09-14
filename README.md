@@ -1,127 +1,131 @@
-# HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners
-Synchronizes Teams owners to HelloID Resource Owner Groupmemberships
+# HelloID-Conn-SA-Sync-EntraID-Owners-To-Resource-Owners
 
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/network/members"><img src="https://img.shields.io/github/forks/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners" alt="Forks Badge"/></a>
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/pulls"><img src="https://img.shields.io/github/issues-pr/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners" alt="Pull Requests Badge"/></a>
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/issues"><img src="https://img.shields.io/github/issues/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners" alt="Issues Badge"/></a>
-<a href="https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners/graphs/contributors"><img alt="GitHub contributors" src="https://img.shields.io/github/contributors/Tools4everBV/HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners?color=2b9348"></a>
+> [!IMPORTANT]
+> **Best practice - maximum synchronization frequency: once per week**
+>
+> Resource ownership changes infrequently, usually weekly or monthly. More frequent
+> synchronization causes unnecessary processing without business value, because owner
+> changes rarely happen multiple times per week.
+>
+> If a higher frequency is required for your organization, contact Tools4ever
+> Support. This helps determine the appropriate configuration for your use case.
 
-
-| :information_source: Information |
-|:---------------------------|
-| This repository contains the connector and configuration code only. The implementer is responsible to acquire the connection details such as username, password, certificate, etc. You might even need to sign a contract or agreement with the supplier before implementing this connector. Please contact the client's application manager to coordinate the connector requirements.       |
+> [!IMPORTANT]
+> This repository contains the connector and configuration code only. The implementer
+> is responsible for acquiring the connection details, such as tenant ID, application
+> ID, certificate and certificate password. Please contact the client's application
+> manager to coordinate the connector requirements.
 
 ## Table of Contents
-- [HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners](#helloid-conn-sa-sync-teams-owners-to-resource-owners)
+
+- [HelloID-Conn-SA-Sync-EntraID-Owners-To-Resource-Owners](#helloid-conn-sa-sync-entraid-owners-to-resource-owners)
   - [Table of Contents](#table-of-contents)
   - [Requirements](#requirements)
   - [Introduction](#introduction)
   - [Getting started](#getting-started)
-  - [Getting started](#getting-started-1)
-    - [Create an API key and secret for HelloID](#create-an-api-key-and-secret-for-helloid)
-    - [Getting the Entra ID graph API access](#getting-the-entra-id-graph-api-access)
-      - [Application Registration](#application-registration)
-      - [Configuring App Permissions](#configuring-app-permissions)
-      - [Authentication and Authorization](#authentication-and-authorization)
+    - [HelloID API configuration](#helloid-api-configuration)
+    - [App registration and certificate setup](#app-registration-and-certificate-setup)
+    - [HelloID-specific configuration](#helloid-specific-configuration)
+    - [Convert PFX to base64](#convert-pfx-to-base64)
     - [Synchronization settings](#synchronization-settings)
   - [Remarks](#remarks)
   - [Getting help](#getting-help)
   - [HelloID Docs](#helloid-docs)
 
 ## Requirements
-- Make sure you have Windows PowerShell 5.1 installed on the server where the HelloID agent and Service Automation agent are running.
-- **App ID & App Secret** for the app registration with permissions to the Microsoft Graph API.
-- Make sure the sychronization is configured to meet your requirements.
-- - Setup synchronization of Entra ID or local AD users and groups to HelloID.
-  - This can be either the [local AD sync](https://docs.helloid.com/en/access-management/directory-sync/active-directory-sync.html) or the [Entra ID sync](https://docs.helloid.com/en/access-management/directory-sync/azure-ad-sync.html).
-  > If using the [local AD sync](https://docs.helloid.com/en/access-management/directory-sync/active-directory-sync.html), make sure the userAttribute "userPrincipalName" is mapped and synced. Also make sure to change the **$taskVariableUserValue** accordingly.
+
+- A Microsoft Entra ID app registration with certificate-based authentication.
+- Microsoft Graph application permissions to read groups and their owners. At minimum, configure the permissions required by the Graph endpoints used by the script, grant admin consent, and verify them in your tenant.
+- Synchronization of Entra ID or local AD users and groups to HelloID. This can be either the [local AD sync](https://docs.helloid.com/en/access-management/directory-sync/active-directory-sync.html) or the [Entra ID sync](https://docs.helloid.com/en/access-management/directory-sync/azure-ad-sync.html).
+- The synchronization must be configured to meet your requirements before scheduling.
 
 ## Introduction
 
-By using this connector, you will have the ability to add Teams owners to the corresponding Resource Owner groups in HelloID.
+This connector synchronizes the owners of supported Entra ID groups to the corresponding Resource Owner groups in HelloID. Microsoft 365 groups, including Teams-enabled groups, and eligible security groups can be included.
 
-This is intended for scenarios where the owners are managed by other sources (e.g. manual actions) than the HelloID products to keep this in sync. This resource owner sync is desinged to work in combination with the [Teams to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-To-SelfService-Products).
+For every group in scope, the connector queries the owners through Microsoft Graph and adds the matching HelloID users to the Resource Owner group. When `$removeMembers` is enabled, users who are no longer an owner are removed as well.
+
+This connector is intended for situations where Entra ID group ownership is managed outside HelloID. It is designed to work together with the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products), which creates the corresponding products and Resource Owner groups.
 
 ## Getting started
 
-## Getting started
+### HelloID API configuration
 
-### Create an API key and secret for HelloID
-1. Go to the `Manage portal > Security > API` section.
-2. Click on the `Add Api key` button to create a new API key.
-3. Optionally, you can add a note that will describe the purpose of this API key
-4. Optionally, you can restrict the IP addresses from which this API key can be used.
-5. Click on the `Save` button to save the API key.
-6. Go to the `Manage portal > Automation > Variable library` section and confim that the auto variables specified in the [connection settings](#connection-settings) are available.
+1. Go to `Manage portal > Security > API`.
+2. Select **Add API key** and create an API key for this scheduled task.
+3. Optionally add a descriptive note and restrict the allowed IP addresses.
+4. Save the API key.
+5. Go to `Manage portal > Automation > Variable library` and verify that the variables used in the [synchronization settings](#synchronization-settings) are available.
 
-### Getting the Entra ID graph API access
+### App registration and certificate setup
 
-By using this connector you will have the ability to manage Entra ID Guest accounts.
+Create a Microsoft Entra ID app registration for certificate-based, application-only authentication to Microsoft Graph. Follow the official Microsoft documentation for [app-only authentication with a certificate](https://learn.microsoft.com/en-us/entra/identity-platform/certificate-credentials).
 
-#### Application Registration
-The first step to connect to Graph API and make requests, is to register a new <b>Entra ID Application</b>. The application is used to connect to the API and to manage permissions.
+Configure the following items in the app registration:
 
-* Navigate to <b>App Registrations</b> in Entra, and select “New Registration” (<b>Entra Portal > Entra ID Directory > App Registration > New Application Registration</b>).
-* Next, give the application a name. In this example we are using “<b>HelloID PowerShell</b>” as application name.
-* Specify who can use this application (<b>Accounts in this organizational directory only</b>).
-* Specify the Redirect URI. You can enter any url as a redirect URI value. In this example we used http://localhost because it doesn't have to resolve.
-* Click the “<b>Register</b>” button to finally create your new application.
+- Create a certificate and upload its public key (`.cer`) under **Certificates & secrets**.
+- Store the private key certificate (`.pfx`) securely. The certificate password is required by the scheduled task.
+- Add the Microsoft Graph application permissions required to read groups and group owners.
+- Grant tenant-wide admin consent for the configured permissions.
 
-Some key items regarding the application are the Application ID (which is the Client ID), the Directory ID (which is the Tenant ID) and Client Secret.
+The application ID and tenant ID can be found on the **Overview** page of the app registration. The certificate is supplied to HelloID as a base64 string; see the next section.
 
-#### Configuring App Permissions
-The [Microsoft Graph documentation](https://docs.microsoft.com/en-us/graph) provides details on which permission are required for each permission type.
+### HelloID-specific configuration
 
-To assign your application the right permissions, navigate to <b>Entra Portal > Entra ID Directory >App Registrations</b>.
-Select the application we created before, and select “<b>API Permissions</b>” or “<b>View API Permissions</b>”.
-To assign a new permission to your application, click the “<b>Add a permission</b>” button.
-From the “<b>Request API Permissions</b>” screen click “<b>Microsoft Graph</b>”.
-For this connector the following permissions are used as <b>Application permissions</b>:
-*	Read and Write all user’s full profiles by using <b><i>User.ReadWrite.All</i></b>
-*	Read and Write all groups in an organization’s directory by using <b><i>Group.ReadWrite.All</i></b>
-*	Read and Write data to an organization’s directory by using <b><i>Directory.ReadWrite.All</i></b>
+The scheduled task uses certificate-based authentication and calls the Microsoft Graph `/groups` and `/groups/{id}/owners` endpoints.
 
-Some high-privilege permissions can be set to admin-restricted and require an administrators consent to be granted.
+Ensure that:
 
-To grant admin consent to our application press the “<b>Grant admin consent for TENANT</b>” button.
+- The app registration has the least-privileged Microsoft Graph application permissions accepted by your tenant for these endpoints.
+- Admin consent has been granted.
+- The certificate uploaded to Entra ID matches the `.pfx` certificate supplied to HelloID.
+- The certificate has not expired and its password is stored as a protected HelloID variable.
 
-#### Authentication and Authorization
-There are multiple ways to authenticate to the Graph API with each has its own pros and cons, in this example we are using the Authorization Code grant type.
+For more information, see the Microsoft documentation for [permissions for Microsoft Graph](https://learn.microsoft.com/en-us/graph/permissions-reference) and [list group owners](https://learn.microsoft.com/en-us/graph/api/group-list-owners?view=graph-rest-1.0).
 
-*	First we need to get the <b>Client ID</b>, go to the <b>Entra Portal > Entra ID Directory > App Registrations</b>.
-*	Select your application and copy the Application (client) ID value.
-*	After we have the Client ID we also have to create a <b>Client Secret</b>.
-*	From the Entra Portal, go to <b>Entra ID Directory > App Registrations</b>.
-*	Select the application we have created before, and select "<b>Certificates and Secrets</b>". 
-*	Under “Client Secrets” click on the “<b>New Client Secret</b>” button to create a new secret.
-*	Provide a logical name for your secret in the Description field, and select the expiration date for your secret.
-*	It's IMPORTANT to copy the newly generated client secret, because you cannot see the value anymore after you close the page.
-*	At last we need to get the <b>Tenant ID</b>. This can be found in the Entra Portal by going to <b>Entra Active Directory > Overview</b>.
+### Convert PFX to base64
+
+HelloID requires the certificate as a base64 string. Use the following example to convert a `.pfx` file:
+
+```powershell
+$filePath = 'C:\Cert'
+$pfxCertName = 'Cert.pfx'
+$pfxPath = "$filePath\$pfxCertName"
+
+$fileContentBytes = [System.IO.File]::ReadAllBytes($pfxPath)
+[System.Convert]::ToBase64String($fileContentBytes) | Set-Content "$filePath\HelloID_Cert_Base64.txt"
+```
+
+Store the resulting value in the `$EntraIdCertificateBase64String` HelloID variable and the certificate password in `$EntraIdCertificatePassword`.
 
 ### Synchronization settings
 
-| Variable name | Description   | Notes |
-| ------------- | -----------   | ----- |
-| $portalBaseUrl    | String value of HelloID Base Url  | (Default Global Variable) |
-| $portalApiKey | String value of HelloID Api Key   | (Default Global Variable) |
-| $portalApiSecret  | String value of HelloID Api Secret    | (Default Global Variable) |
-| $EntraTenantId    | String value of Entra ID Tenant ID  | Recommended to set as Global Variable |
-| $EntraAppID | String value of Entra ID App ID  | Recommended to set as Global Variable |
-| $EntraAppSecret  | String value of Entra ID App Secret  | Recommended to set as Global Variable |
-| $entraIDGroupsSearchFilter   | String value of seachfilter of which Entra ID groups to include   | Optional, when no filter is provided ($entraIDGroupsSearchFilter = $null), all groups will be queried - Only displayName and description are supported with the search filter. Reference: https://learn.microsoft.com/en-us/graph/search-query-parameter?tabs=http#using-search-on-directory-object-collections  |
-| $resourceOwnerGroupSource | String value of source of the groups in HelloID    |  |
-| $resourceOwnerGroupPrefix | String value of prefix to recognize the owner group    | The value is set to match the value of $calculatedResourceOwnerGroupPrefix from the [Teams to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-To-SelfService-Products) |
-| $resourceOwnerGroupSuffix | String value of suffix to recognize the owner group    | The value is set to match the value of $calculatedResourceOwnerGroupSuffix from the [Teams to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-Teams-To-SelfService-Products) |
-| $removeMembers | Boolean value of whether to remove the teams owners for resource owner groups when they are no longer an owner    | |
+| Variable name | Description | Notes |
+| --- | --- | --- |
+| `$portalBaseUrl` | HelloID base URL | Default global variable |
+| `$portalApiKey` | HelloID API key | Default global variable |
+| `$portalApiSecret` | HelloID API secret | Default global variable |
+| `$EntraIdTenantId` | Microsoft Entra ID tenant ID | Recommended as a global variable |
+| `$EntraIdAppId` | Microsoft Entra ID application ID | Recommended as a global variable |
+| `$EntraIdCertificateBase64String` | Base64 string of the Entra ID application certificate | Recommended as a global variable |
+| `$EntraIdCertificatePassword` | Password of the application certificate | Recommended as a protected global variable |
+| `$entraIDGroupsSearchFilter` | Optional Microsoft Graph filter for groups to include | When `$null`, all supported groups are queried. Only supported Graph filter properties should be used. See the [Microsoft Graph search query documentation](https://learn.microsoft.com/en-us/graph/search-query-parameter). |
+| `$resourceOwnerGroupSource` | Source of the Resource Owner groups in HelloID | If the source is not `Local`, synchronization by the target system can overwrite memberships created by this task. |
+| `$resourceOwnerGroupPrefix` | Prefix used to identify the Resource Owner group | Should match the prefix configured by the Entra ID Groups to Products Sync. |
+| `$resourceOwnerGroupSuffix` | Suffix used to identify the Resource Owner group | Should match the suffix configured by the Entra ID Groups to Products Sync. |
+| `$removeMembers` | Whether to remove users who are no longer owners | When `$true`, manually added users can be removed. Default in the script is `$true`. |
 
 ## Remarks
-- The Productassignments are granted and revoked. Make sure your configuration is correct to avoid unwanted revokes
-- This groupmembership sync is designed to work in combination with the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products). If your products are from a different source, this sync task might not work and needs changes accordingly.
+
+- Review the configured group filter, Resource Owner group prefix and suffix before enabling the scheduled task.
+- Enabling `$removeMembers` allows the task to remove existing memberships. Make sure this behavior is desired, because manually added users can be removed.
+- This connector is designed to work with the [Entra ID Groups to Products Sync](https://github.com/Tools4everBV/HelloID-Conn-SA-Sync-AzureActiveDirectory-Groups-To-SelfService-Products). Without that synchronization, the corresponding Resource Owner groups may not exist and the task may require changes.
+- Test changes with `$dryRun = $true` before performing changes in production.
 
 ## Getting help
-> _For more information on how to configure a HelloID PowerShell scheduled task, please refer to our [documentation](https://docs.helloid.com/hc/en-us/articles/115003253294-Create-Custom-Scheduled-Tasks) pages_
 
-> _If you need help, feel free to ask questions on our [forum](https://forum.helloid.com)_
+For more information about configuring a HelloID PowerShell scheduled task, see the [HelloID documentation](https://docs.helloid.com/hc/en-us/articles/115003253294-Create-Custom-Scheduled-Tasks).
 
 ## HelloID Docs
-The official HelloID documentation can be found at: https://docs.helloid.com/
+
+The official HelloID documentation is available at [docs.helloid.com](https://docs.helloid.com/).
