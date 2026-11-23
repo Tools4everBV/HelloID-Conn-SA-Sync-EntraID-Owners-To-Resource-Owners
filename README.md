@@ -1,14 +1,12 @@
 # HelloID-Conn-SA-Sync-EntraID-Owners-To-Resource-Owners
 
 > [!IMPORTANT]
-> **Best practice - maximum synchronization frequency: once per week**
+> **Best Practice - Maximum Synchronization Frequency: Once per week**
 >
-> Resource ownership changes infrequently, usually weekly or monthly. More frequent
-> synchronization causes unnecessary processing without business value, because owner
-> changes rarely happen multiple times per week.
+> **Why this maximum?**
+> Resource ownership changes infrequently (weekly or monthly). More frequent synchronization causes unnecessary processing load without business value, as owner changes rarely happen multiple times per week.
 >
-> If a higher frequency is required for your organization, contact Tools4ever
-> Support. This helps determine the appropriate configuration for your use case.
+> If a higher frequency is required for your organization, please contact **Tools4ever Support**. This helps us understand your use case and provide proper guidance.
 
 > [!IMPORTANT]
 > This repository contains the connector and configuration code only. The implementer
