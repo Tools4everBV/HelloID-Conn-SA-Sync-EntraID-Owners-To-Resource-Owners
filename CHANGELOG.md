@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.1.0] - 14-09-2026
+## [2.0.0] - 2026-09-14
 
 ### Added
 
@@ -10,9 +10,9 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
-- Changed name to EntraID sync
-- Changed authentication to Certificate based
+- **Breaking change:** Changed authentication from client secret to certificate based. Existing tasks must be updated with the new certificate global variables (`EntraIdCertificateBase64String` and `EntraIdCertificatePassword`).
+- Renamed the project from HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners to HelloID-Conn-SA-Sync-EntraID-Owners-To-Resource-Owners
 
-## [1.0.0] - 25-10-2025
+## [1.0.0] - 2025-10-25
 
 This is the first official release of HelloID-Conn-SA-Sync-Teams-Owners-To-Resource-Owners.
