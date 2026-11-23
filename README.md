@@ -14,6 +14,12 @@
 > ID, certificate and certificate password. Please contact the client's application
 > manager to coordinate the connector requirements.
 
+> [!WARNING]
+> Version 2.0.0 is a breaking change: authentication changed from a client secret to a
+> certificate. Existing tasks must be updated with the `$EntraIdCertificateBase64String`
+> and `$EntraIdCertificatePassword` variables, and the script is now named
+> `Sync-EntraID-Owners-To-Resource-Owners-Groupmemberships.ps1`.
+
 ## Table of Contents
 
 - [HelloID-Conn-SA-Sync-EntraID-Owners-To-Resource-Owners](#helloid-conn-sa-sync-entraid-owners-to-resource-owners)
